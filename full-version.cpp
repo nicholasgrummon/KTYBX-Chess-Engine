@@ -1110,7 +1110,6 @@ int quiescence_search(int color, int depth, int alpha, int beta) {
 
     int best_eval = static_eval; int eval;
     if ((num_moves == 0) || (depth >= (Q_EXPANSION_FACTOR*iteration_depth))) {
-        std::cout << static_eval << std::endl;
         return static_eval;
     }
     // end search if either king is captured
@@ -1143,7 +1142,6 @@ int quiescence_search(int color, int depth, int alpha, int beta) {
             int move = get_next_best_move(i, num_moves, iteration_depth+depth+1);
             int origination = (move >> 6); int destination = (move & 63);
             make_move(origination, destination, iteration_depth+depth+1);
-            print_coords(moves_list[iteration_depth+depth][i]); std::cout << std::endl;
             update_checks();
             eval = -quiescence_search(opp(color), depth+1, -beta, -alpha);
             takeback_move(origination, destination, iteration_depth+depth+1);
@@ -1218,7 +1216,6 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
             current_variation[iteration_depth - depth] = move;
             int origination = (move >> 6); int destination = (move & 63);
             make_move(origination, destination, depth);
-            if (depth == iteration_depth) { print_coords(move); std::cout << std::endl; }
 
             // skip move if it fails to prevent check
             update_checks();
@@ -1236,8 +1233,6 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
                 board_eval = -minimax(opp(color), depth-1, updated_terminal_depth, -beta, -alpha);
                 takeback_move(origination, destination, depth);
                 layer_previous_evals[iteration_depth-depth][move] = board_eval;
-
-                if (depth == iteration_depth) { std::cout << board_eval << std::endl; }
 
                 // store position attributes in hash table
                 HASH_TABLE[move_pos_hash][p_key] = move_pos_key;
