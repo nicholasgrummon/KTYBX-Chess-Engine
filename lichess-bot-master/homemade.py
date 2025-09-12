@@ -34,8 +34,8 @@ class RandomMove(ExampleEngine):
 
 class KTYBX(ExampleEngine):
     """Implement KTYBX Engine"""
-
+    # TODO: Engine missing mate patterns
     def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE) -> PlayResult:
         output = subprocess.run(["./engines/ktybx","-i",board.fen()], capture_output=True, text=True)
 
-        return PlayResult(output.stdout, None)
+        return PlayResult(chess.Move.from_uci(output.stdout), None)
