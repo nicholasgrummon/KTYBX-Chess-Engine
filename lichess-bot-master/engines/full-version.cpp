@@ -2,6 +2,8 @@
 // KTY-BX COMMAND LINE CHESS ENGINE
 /////////////////////////////////////////////////////////////////////////////////////
 #include <iostream>
+#include <fstream> // TODO: remove?
+#include <bitset>
 #include <ctime>
 #include <chrono>
 int timer1 = 0;
@@ -14,7 +16,7 @@ int called = 0;
 // >>> tune engine here <<<
 /////////////////////////////////////////////////////////////////////////////////////
 // settings
-const int MAX_DEPTH = 24;              // set an evaluation depth
+const int MAX_DEPTH = 5;              // set an evaluation depth
 const int MAX_SEARCH_TIME = 5;         // limit the engine's search time (in seconds)
 const int MAX_TREE_WIDTH = 150;        // provide a max branching factor (must be >= 35)
 const int Q_EXPANSION_FACTOR = 3;      // expand quiescence search up to 3 times deeper
@@ -595,9 +597,11 @@ uint64_t gen_R_moves(int i) {
     // rooks move along rank and file rays if they are not blocked
     uint64_t moves = 0;
     int blocker_index;
-    uint64_t blockers;
-    if (pos[white] & (1ULL << i)) { blockers = ~(pos[empty] | pos[bK]); }
-    else { blockers = ~(pos[empty] | pos[wK]); }
+    // TODO: understand why I had the following lines instead of just blockers = ~pos[empty]
+    // uint64_t blockers;
+    // if (pos[white] & (1ULL << i)) { blockers = ~(pos[empty] | pos[bK]); }
+    // else { blockers = ~(pos[empty] | pos[wK]); }
+    uint64_t blockers = ~pos[empty];
 
     moves |= RAYS[i][nrt]; // north
     if (RAYS[i][nrt] & blockers) {
@@ -630,9 +634,11 @@ uint64_t gen_B_moves(int i) {
     // bishops move along diagonal rays if they are not blocked
     uint64_t moves = 0;
     int blocker_index;
-    uint64_t blockers;
-    if (pos[white] & (1ULL << i)) { blockers = ~(pos[empty] | pos[bK]); }
-    else { blockers = ~(pos[empty] | pos[wK]); }
+    // TODO: understand why I had the following lines instead of just blockers = ~pos[empty]
+    // uint64_t blockers;
+    // if (pos[white] & (1ULL << i)) { blockers = ~(pos[empty] | pos[bK]); }
+    // else { blockers = ~(pos[empty] | pos[wK]); }
+    uint64_t blockers = ~pos[empty];
 
     moves |= RAYS[i][nrtest]; // north east
     if (RAYS[i][nrtest] & blockers) {
@@ -688,6 +694,20 @@ uint64_t generate_piece_attacks(int i) {
     else if ((pos[wK] | pos[bK]) & (1ULL << i)) { return gen_K_moves(i); }
 
     return 0;
+}
+
+void generate_checks(int color) {
+    checks[color-white] = 0;
+    for (int i=63; i>=0; i--) {
+        if (pos[color] & (1ULL << i)) {
+            checks[color-white] |= generate_piece_attacks(i);
+        }
+    }
+}
+
+void update_checks() {
+    generate_checks(white);
+    generate_checks(black);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -911,10 +931,10 @@ int heuristic_eval(int move, int color, int depth) {
     int destination = (move & 63);
     int eval = 0;
     // principal variation move
-    if (move == principal_variation[iteration_depth - depth]) { eval += 30000; }
+    if (move == principal_variation[iteration_depth - depth]) { eval += 3000; }
 
     // previous branch best move
-    if (move == layer_best_moves[depth-1]) { eval += 20000; }
+    if (move == layer_best_moves[depth-1]) { eval += 2000; }
 
     // killer moves
     if (move == layer_killer_moves[depth]) { eval += 1000; }
@@ -924,17 +944,32 @@ int heuristic_eval(int move, int color, int depth) {
     //int hash = gen_hash_index(key);
     //if ((key == HASH_TABLE[hash][p_key]) && (move == HASH_TABLE[hash][p_best])) { eval += 10000; }
 
-    // mvv-lva
-    if (pos[opp(color)] & (1ULL << destination)) { eval += (material_value_at(destination) - material_value_at(origination)); }
+    // checks
+    make_move(origination, destination, depth);
+    generate_checks(color);
+    if ((pos[wK] | pos[bK]) & ~pos[color] & checks[color-white]) { eval += 500; }    // add incentive for searching checks
+    takeback_move(origination, destination, depth);
+    generate_checks(color);
 
-    // controlling center
-    if ((1ULL << (move & 63)) & MIDDLE) { eval += MIDDLE_BONUS; }
-    if ((1ULL << (move & 63)) & AUXMID) { eval += AUXMID_BONUS; }
-    if ((1ULL << (move & 63)) & EDGE) { eval -= EDGE_PENALTY; }
+    // captures
+    if (pos[opp(color)] & (1ULL << destination)) {
+        eval += 150;    // static incentive
+        eval += mvv_lva(move, color);   // mvv-lva ordering
+    }
 
-    // disincentivize moving queen and king
-    if (material_value_at(origination) < R_VAL) { eval += (material_value_at(origination) / 100); }
+    // putting pawns in center
+    if ((1ULL << origination) & (wP | bP) & color) {
+        if ((1ULL << (move & 63)) & MIDDLE) { eval += MIDDLE_BONUS; }
+        else if ((1ULL << (move & 63)) & AUXMID) { eval += AUXMID_BONUS; }
+        else if ((1ULL << (move & 63)) & EDGE) { eval -= EDGE_PENALTY; }
+    }
+
+    // incentivize moving minor pieces ahead of queen and king
+    if (material_value_at(origination) <= R_VAL) { eval += (material_value_at(origination) / 100); }
+
+    // average previous node board evals
     eval += layer_previous_evals[iteration_depth-depth][move];
+    eval /= 2;
 
     return eval;
 }
@@ -1025,20 +1060,6 @@ int get_next_best_move(int move_num, int num_moves, int depth) {
 // the engine looks at a combination of material and positional advantages and also
 // orders each move with heuristic weight to improve alpha-beta cut off rates
 /////////////////////////////////////////////////////////////////////////////////////
-void generate_checks(int color) {
-    checks[color-white] = 0;
-    for (int i=63; i>=0; i--) {
-        if (pos[color] & (1ULL << i)) {
-            checks[color-white] |= generate_piece_attacks(i);
-        }
-    }
-}
-
-void update_checks() {
-    generate_checks(white);
-    generate_checks(black);
-}
-
 bool game_is_won_by_checkmate() {
     update_checks();
     if (pos[wK] & checks[1]) {
@@ -1260,6 +1281,15 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
             current_variation[iteration_depth - depth] = move;
             int origination = (move >> 6); int destination = (move & 63);
             make_move(origination, destination, depth);
+            
+            std::ofstream outfile("eval.txt", std::ios_base::app);
+            outfile << "depth: " << depth << std::string(depth, ' ');
+            outfile << char('h' - origination%8);
+            outfile << char('1' + origination/8);
+            outfile << char('h' - destination%8);
+            outfile << char('1' + destination/8);
+            outfile << " " << values_list[depth-1][i] << std::endl;
+            outfile.close();
 
             // skip move if it fails to prevent check
             update_checks();
@@ -1307,7 +1337,9 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
     else { return best_eval; }
 }
 
+
 int depth_search(int color, int depth_cap, bool printout=false) {
+    // TODO: end depth search if forced mate found early
     iteration_depth = 1;
     int move;
     clock_t start = time(0);
@@ -1330,7 +1362,10 @@ int depth_search(int color, int depth_cap, bool printout=false) {
 
         // print statistics
         if (printout) {
+            // print coordinates
             print_coords(move);
+
+            // print eval
             std::cout << "  reached depth " << iteration_depth << " in " << (time(0)-start) << " seconds" << std::endl;
             std::cout << m_nodes << " minimax nodes";
             std::cout << ", " << q_nodes << " quiesce nodes";
@@ -1343,6 +1378,8 @@ int depth_search(int color, int depth_cap, bool printout=false) {
             std::cout << "best cont: ";
             for (int i=0; i<iteration_depth; i++) {
                 int pv = principal_variation[i];
+                
+                // print coordinates
                 print_coords(pv);
                 std::cout << ", ";
             }
@@ -1353,297 +1390,19 @@ int depth_search(int color, int depth_cap, bool printout=false) {
     return move;
 }
 
-/////////////////////////////////////////////////////////////////////////////////////
-// PLAYER INTERFACE
-/////////////////////////////////////////////////////////////////////////////////////
-void print_title() {
-    std::cout << "KITTY BOX COMMAND LINE CHESS ENGINE\n" << std::endl;
-}
-
-void set_position() {
-    char choice;
-    std::cout << "PLAY A STANDARD GAME?" << std::endl;
-    std::cout << "[Y]:yes [N]:enter FEN\nENTER: ";
-
-    std::cin >> choice;
-    choice = toupper(choice);
-
-    if (choice == 'Y') {
-        new_game();
-    }
-    else {
-        std::string fen;
-        std::cout << "\nENTER FEN: ";
-        std::cin >> fen;
-        read_FEN(fen);
-    }
-}
-
-void assign_colors(){
-    char color;
-    std::cout << "\nSELECT COLOR TO BEGIN:\n[W]:white [B]:black [R]:random\nENTER: ";
-    std::cin >> color;
-    color = toupper(color);
-
-    if (color == 'W') {
-        player = white;
-        computer = black;
-    }
-    else if (color == 'B') {
-        player = black;
-        computer = white;
-    }
-    else if (color == 'R') {
-        int selector = (rand() % 2);
-        player = (13 + selector);
-        computer = (14 - selector);
-    }
-    else {
-        std::cout << "INVALID OPTION" << std::endl;
-        return assign_colors();
-    }
-}
-
-void print_board() {
-    int rank = 8;
-    std::cout << "    KITTY BOX CHESS" << std::endl;
-    std::cout << "   -----------------" << std::endl;
-    for (int i=63; i>=0; i--) {
-        if (i%8 == 7) { std::cout << rank << " | "; rank--; } // print edge
-        if (pos[wP] & (1ULL << i)) { std::cout << "o "; } // print white pieces
-        else if (pos[wN] & (1ULL << i)) { std::cout << "N "; }
-        else if (pos[wB] & (1ULL << i)) { std::cout << "B "; }
-        else if (pos[wR] & (1ULL << i)) { std::cout << "R "; }
-        else if (pos[wQ] & (1ULL << i)) { std::cout << "Q "; }
-        else if (pos[wK] & (1ULL << i)) { std::cout << "K "; }
-
-        else if (pos[bP] & (1ULL << i)) { std::cout << "x "; } // print black pieces
-        else if (pos[bN] & (1ULL << i)) { std::cout << "n "; }
-        else if (pos[bB] & (1ULL << i)) { std::cout << "b "; }
-        else if (pos[bR] & (1ULL << i)) { std::cout << "r "; }
-        else if (pos[bQ] & (1ULL << i)) { std::cout << "q "; }
-        else if (pos[bK] & (1ULL << i)) { std::cout << "k "; }
-
-        else if (pos[empty] & (1ULL << i)) { std::cout << ". "; }
-
-        if (i%8 == 0) { std::cout << "| " << std::endl; }
-
-    }
-    std::cout << "   -----------------" << std::endl;
-    std::cout << "    A B C D E F G H  " << std::endl;
-}
-
-void print_help_menu() {
-    std::cout << "\nHELP MENU\n/*" << std::endl;
-
-    std::cout << "ENTERING MOVES:" << std::endl;
-    std::cout << "  Refer to squares using the coordinate system on the" << std::endl;
-    std::cout << "  side of the board.  Enter the origination square" << std::endl;
-    std::cout << "  followed by the destination square, separated by a colon." << std::endl;
-    std::cout << "\n  Possible errors occur from entering more than five" << std::endl;
-    std::cout << "  characters, selecting a square without a piece on it, " << std::endl;
-    std::cout << "  selecting an enemy piece, or making an illegal move." << std::endl;
-    std::cout << "\n  Ex: enter \"E2:E4\" to move a piece from e2 to e4." << std::endl;
-
-    std::cout << "\nTAKING BACK MOVES:" << std::endl;
-    std::cout << "* Enter \"BACK\" to undo one move (white and black)." << std::endl;
-    
-    std::cout << "\nRESIGNING:" << std::endl;
-    std::cout << "* Enter \"RESIGN\" to end the current game." << std::endl;
-
-    std::cout << "\nREQUESTING HINTS:" << std::endl;
-    std::cout << "* Enter \"HINT\" to see the engine recommendation." << std::endl;
-    std::cout << "  Normally, the engine only analyzes during its own" << std::endl;
-    std::cout << "  turn, so this command will run a shallower depth search" << std::endl;
-    std::cout << "  to save time.  For a full analysis see below." << std::endl;
-
-    std::cout << "\nREQUESTING FULL ANALYSIS:" << std::endl;
-    std::cout << "* Enter \"FULL\" to see a full depth analysis. This" << std::endl;
-    std::cout << "  will take much longer than requesting a hint" << std::endl;
-
-    std::cout << "\nENGINE SETTINGS:" << std::endl;
-    std::cout << "* Enter \"STATS\" to toggle on/off the engine search" << std::endl;
-    std::cout << "  statistics - disabled by default" << std::endl;
-    std::cout << "* Enter \"NUM\" to show the number of moves searched at" << std::endl;
-    std::cout << "  each depth - enabled by default." << std::endl;
-    std::cout << "* Enter \"CUTS\" to show the number of alpha-beta cut" << std::endl;
-    std::cout << "  offs in statistics - enabled by default." << std::endl;
-    std::cout << "* Enter \"HASH\" to show the number of hash entries used" << std::endl;
-    std::cout << "  in statistics - disabled by default." << std::endl;
-
-    std::cout << "\nABOUT KITTY BOX:" << std::endl;
-    std::cout << "  . . . (fill in later)" << std::endl;
-
-    std::cout << "*/" << std::endl;
-}
-
-bool input_is_formatted(std::string move) {
-    // improper formatting conditions
-    if (move.length() != 5) { return false; }
-    else if (move[2] != ':') { return false; }
-    else if ((move[0] < 'A') || (move[0] > 'H')) { return false; }
-    else if ((move[1] < '1') || (move[1] > '8')) { return false; }
-
-    else if ((move[0] < 'A') || (move[0] > 'H')) { return false; }
-    else if ((move[4] < '1') || (move[4] > '8')) { return false; }
-
-    // input formatted correctly
-    else { return true; }
-}
-
-int get_player_move(int color, int move_number) {
-    std::string move; 
-    int origination; int destination;
-
-    if (color == white) { std::cout << "\nENTER MOVE: " << ((move_number / 2) + 1) << ". "; }
-    else { std::cout << "\nENTER MOVE: " << move_number << ". . . "; }
-    std::cin >> move;
-    for (int i=0; i<move.length(); i++) { move[i] = toupper(move[i]); }
-
-    if (move == "HELP") {
-        print_help_menu();
-        return get_player_move(color, move_number);
-    }
-
-    else if (move == "BACK") {
-        if (move_number >= 2) {
-            int opp_last_move = game_continuation[move_number-1];
-            int own_last_move = game_continuation[move_number-2];
-            takeback_move((opp_last_move >> 6), (opp_last_move & 63), (MAX_DEPTH + move_number - 1));
-            takeback_move((own_last_move >> 6), (own_last_move & 63), (MAX_DEPTH + move_number - 2));
-            print_board();
-            return get_player_move(color, move_number-1);
-        }
-
-        else { 
-            std::cout << "NO PREVIOUS MOVE" << std::endl;
-            return get_player_move(color, move_number);
-        }
-    }
-
-    else if (move == "RESIGN") {
-        if (color == white) { w_resignation = true; }
-        else { b_resignation = true; }
-        return 0;
-    }
-
-    else if (move == "HINT") {
-        int move = depth_search(color, 5);
-        print_coords(move); std::cout << std::endl;
-        clear_hash_table();
-        return get_player_move(color, move_number);
-    }
-
-    else if (input_is_formatted(move)) {
-        origination = 63-((move[0] - 'A') + ('8' - move[1])*8);
-        destination = 63-((move[3] - 'A') + ('8' - move[4])*8);
-
-        // if the destination square matches one of the possible moves and isn't
-        // occupied by the piece's own color, then the move is legal
-        if (pos[color] & (1ULL << origination)) {
-            if (((~pos[color]) & generate_piece_moves(origination)) & (1ULL << destination)) {
-                make_move(origination, destination, 2*MAX_DEPTH+move_number+1);
-                update_checks();
-                takeback_move(origination, destination, 2*MAX_DEPTH+move_number+1);
-                if (((color == white) && ((pos[wK] & checks[1]) == 0)) ||
-                    ((color == black) && ((pos[bK] & checks[0]) == 0))) {
-                    // pack player move
-                    return ((origination << 6) | (destination));
-                }
-                else {
-                    std::cout << "KING IS IN CHECK" << std::endl;
-                    return get_player_move(color, move_number);
-                }
-            }
-            else {
-                std::cout << "ILLEGAL MOVE" << std::endl;
-                return get_player_move(color, move_number);
-            }
-        }
-        else {
-            std::cout << "SELECT OWN PIECES" << std::endl;
-            return get_player_move(color, move_number);
-        }
-    }
-
-    else {
-        std::cout << "INCORRECT FORMAT (enter \"HELP\" FOR HELP)" << std::endl;
-        return get_player_move(color, move_number);
-    }
-}
-
-void conclude_game() {
-    if (game_is_won_by_checkmate() > 0) { std::cout << "\n\nWHITE WINS !!!" << std::endl; }
-    else if (game_is_won_by_checkmate() < 0) { std::cout << "\n\nBLACK WINS !!!" << std::endl; }
-    else if (game_is_drawn_by_insufficient_material()) { std::cout << "\n\nDRAW GAME !!!" << std::endl; }
-    else if (w_resignation) { std::cout << "\n\nWHITE RESIGNS, BLACK WINS !!!" << std::endl; }
-    else if (b_resignation) { std::cout << "\n\nBLACK RESIGNS, WHITE WINS !!!" << std::endl; }
-}
-
-bool play_again() {
-    w_resignation = false; b_resignation = false;
-    char answer;
-    std::cout << "\nGOOD GAME! PLAY AGAIN?\n[Y]:yes [N]:no\nENTER: ";
-    std::cin >> answer;
-    if (answer == 'Y') { return true; }
-    else if ((answer == 'N') || (answer == 'Q')) { return false;}
-    else {
-        std::cout << "Invalid selection." << std::endl;
-        return play_again();
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////////////
-// GAMEPLAY
-/////////////////////////////////////////////////////////////////////////////////////
-int get_white_move(int move_number) {
-    if (player == white) { return get_player_move(white, move_number); }
-    else { return depth_search(white, MAX_DEPTH); }
-}
-
-int get_black_move(int move_number) {
-    if (player == black) { return get_player_move(black, move_number); }
-    else { return depth_search(black, MAX_DEPTH); }
-}
-
-// int main() {
-//     srand(time(0)); 
-//     // std::system("cls"); // for Windows systems
-//     print_title(); set_position(); assign_colors();
-//     fill_RAYS(); update_checks(); seed_tables();
-
-//     int move_number = 0; int move;
-
-//     while(true) {
-//         clear_hash_table();
-
-//         //if (player == white) { std::system("cls"); }
-//         print_board();
-//         if (game_is_won_by_checkmate()) { break; }
-//         else if (game_is_drawn_by_insufficient_material()) { break; }
-//         if (move_number%2 == 0) { move = get_white_move(move_number); }
-//         else { move = get_black_move(move_number); }
-//         if (w_resignation) { break; }
-//         game_continuation[move_number] = move;
-//         make_move((move >> 6), (move & 63), (2*MAX_DEPTH + move_number));
-//         move_number++;
-//     }
-
-//     conclude_game();
-//     if (play_again()) { main(); }
-
-//     return 0;
-// }
-
-
+// Main lichess bot
 int main(int argc, char* argv[]) {
+    std::ofstream outfile("eval.txt");
+    outfile.close();
     fill_RAYS(); update_checks(); seed_tables();
+
     for (int i=0; i<argc; i++) {
         if (std::string(argv[i]) == "-i") {
             read_FEN(argv[++i]);
         }
     }
-    int move = depth_search(computer, MAX_DEPTH);
+    
+    int move = depth_search(computer, MAX_DEPTH, true);
     print_coords(move);
     return 0;
 }

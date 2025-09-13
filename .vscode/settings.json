@@ -1,0 +1,23 @@
+{
+    "files.associations": {
+        "cctype": "cpp",
+        "clocale": "cpp",
+        "cstdarg": "cpp",
+        "cstddef": "cpp",
+        "cstdint": "cpp",
+        "cstdio": "cpp",
+        "cstdlib": "cpp",
+        "ctime": "cpp",
+        "cwchar": "cpp",
+        "cwctype": "cpp",
+        "memory_resource": "cpp",
+        "random": "cpp",
+        "utility": "cpp",
+        "fstream": "cpp",
+        "new": "cpp",
+        "typeinfo": "cpp",
+        "iostream": "cpp",
+        "bitset": "cpp",
+        "ostream": "cpp"
+    }
+}
