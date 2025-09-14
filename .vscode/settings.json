@@ -18,6 +18,7 @@
         "typeinfo": "cpp",
         "iostream": "cpp",
         "bitset": "cpp",
-        "ostream": "cpp"
+        "ostream": "cpp",
+        "iosfwd": "cpp"
     }
 }

@@ -16,7 +16,7 @@ int called = 0;
 // >>> tune engine here <<<
 /////////////////////////////////////////////////////////////////////////////////////
 // settings
-const int MAX_DEPTH = 5;              // set an evaluation depth
+const int MAX_DEPTH = 4;              // set an evaluation depth
 const int MAX_SEARCH_TIME = 5;         // limit the engine's search time (in seconds)
 const int MAX_TREE_WIDTH = 150;        // provide a max branching factor (must be >= 35)
 const int Q_EXPANSION_FACTOR = 3;      // expand quiescence search up to 3 times deeper
@@ -102,7 +102,7 @@ uint64_t FILE_F = 0b000001000000010000000100000001000000010000000100000001000000
 uint64_t FILE_G = 0b0000001000000010000000100000001000000010000000100000001000000010;
 uint64_t FILE_H = 0b0000000100000001000000010000000100000001000000010000000100000001;
 
-uint64_t MIDDLE = 0b0000000000000000000000000001100000011000000000000000000000000000;
+uint64_t MIDDLE = 0b0000000000000000000000000011100000111000000000000000000000000000;
 uint64_t AUXMID = 0b0000000000000000001111000010010000100100001111000000000000000000;
 uint64_t EDGE   = 0b0000000000000000100000011000000110000001100000010000000000000000;
 
@@ -422,6 +422,7 @@ void fill_RAYS() {
 // psuedo-unique zobrist key can be generated for any position.  This key can then be
 // used to store information about positions in a hash table
 /////////////////////////////////////////////////////////////////////////////////////
+// TODO: hash table getting collisions at depth 4+
 uint64_t HASH_TABLE[HASH_TABLE_LENGTH][4];
 int p_key=0; int p_eval=1; int p_depth=2; int p_best=3;
 
@@ -895,26 +896,26 @@ void takeback_move(int origination, int destination, int depth) {
 // MOVE ORDER HEURISTICS
 /////////////////////////////////////////////////////////////////////////////////////
 void update_principle_variation(int color) {
-    uint64_t key = gen_zobrist_key(color);
-    int hash = gen_hash_index(key);
-    for (int n=0; n<iteration_depth; n++) {
-        // retrieve best move from transposition table
-        int best_move = HASH_TABLE[hash][p_best];
-        principal_variation[n] = best_move;
-        int origination = (best_move >> 6);
-        int destination = (best_move & 63);
-        // find zobrist key for next position
-        make_move(origination, destination, n+1);
-        color = opp(color);
-        key = gen_zobrist_key(color);
-        hash = gen_hash_index(key);
-    }
-    // undo board manipulation
-    for (int n=iteration_depth; n>0; n--) {
-        int origination = (principal_variation[n-1] >> 6);
-        int destination = (principal_variation[n-1] & 63);
-        takeback_move(origination, destination, n);
-    }
+    // uint64_t key = gen_zobrist_key(color);
+    // int hash = gen_hash_index(key);
+    // for (int n=0; n<iteration_depth; n++) {
+    //     // retrieve best move from transposition table
+    //     int best_move = HASH_TABLE[hash][p_best];
+    //     principal_variation[n] = best_move;
+    //     int origination = (best_move >> 6);
+    //     int destination = (best_move & 63);
+    //     // find zobrist key for next position
+    //     make_move(origination, destination, n+1);
+    //     color = opp(color);
+    //     key = gen_zobrist_key(color);
+    //     hash = gen_hash_index(key);
+    // }
+    // // undo board manipulation
+    // for (int n=iteration_depth; n>0; n--) {
+    //     int origination = (principal_variation[n-1] >> 6);
+    //     int destination = (principal_variation[n-1] & 63);
+    //     takeback_move(origination, destination, n);
+    // }
 }
 
 int mvv_lva(int move, int color) {
@@ -934,7 +935,7 @@ int heuristic_eval(int move, int color, int depth) {
     if (move == principal_variation[iteration_depth - depth]) { eval += 3000; }
 
     // previous branch best move
-    if (move == layer_best_moves[depth-1]) { eval += 2000; }
+    if (move == layer_best_moves[iteration_depth - depth]) { eval += 2000; }
 
     // killer moves
     if (move == layer_killer_moves[depth]) { eval += 1000; }
@@ -957,19 +958,21 @@ int heuristic_eval(int move, int color, int depth) {
         eval += mvv_lva(move, color);   // mvv-lva ordering
     }
 
-    // putting pawns in center
-    if ((1ULL << origination) & (wP | bP) & color) {
-        if ((1ULL << (move & 63)) & MIDDLE) { eval += MIDDLE_BONUS; }
-        else if ((1ULL << (move & 63)) & AUXMID) { eval += AUXMID_BONUS; }
-        else if ((1ULL << (move & 63)) & EDGE) { eval -= EDGE_PENALTY; }
+    // putting pawns and knights in center
+    if ((1ULL << origination) & (pos[wP] | pos[bP] | pos[wN] | pos[bN]) & pos[color]) {
+        if ((1ULL << destination) & MIDDLE) { eval += MIDDLE_BONUS; }
+        else if ((1ULL << destination) & AUXMID) { eval += AUXMID_BONUS; }
+        else if ((1ULL << destination) & EDGE) { eval -= EDGE_PENALTY; }
     }
 
-    // incentivize moving minor pieces ahead of queen and king
-    if (material_value_at(origination) <= R_VAL) { eval += (material_value_at(origination) / 100); }
+    // incentivize moving minor pieces ahead of K,Q,pawns
+    int material_val = material_value_at(origination);
+    if (material_val == B_VAL || material_val == N_VAL) { eval += 10; }
 
     // average previous node board evals
-    eval += layer_previous_evals[iteration_depth-depth][move];
-    eval /= 2;
+    // eval += layer_previous_evals[iteration_depth-depth][move];
+    // eval /= 2;
+
 
     return eval;
 }
@@ -1281,15 +1284,6 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
             current_variation[iteration_depth - depth] = move;
             int origination = (move >> 6); int destination = (move & 63);
             make_move(origination, destination, depth);
-            
-            std::ofstream outfile("eval.txt", std::ios_base::app);
-            outfile << "depth: " << depth << std::string(depth, ' ');
-            outfile << char('h' - origination%8);
-            outfile << char('1' + origination/8);
-            outfile << char('h' - destination%8);
-            outfile << char('1' + destination/8);
-            outfile << " " << values_list[depth-1][i] << std::endl;
-            outfile.close();
 
             // skip move if it fails to prevent check
             update_checks();
@@ -1302,6 +1296,27 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
                 m_nodes++;
                 uint64_t move_pos_key = gen_zobrist_key(opp(color)); // the position arising after a move is the other player's turn
                 int move_pos_hash = gen_hash_index(move_pos_key);
+
+                std::ofstream outfile("eval.txt", std::ios_base::app);
+                outfile << iteration_depth << "." << depth << " ";
+                outfile << std::string(iteration_depth-depth, ' ');
+                outfile << char('h' - origination%8);
+                outfile << char('1' + origination/8);
+                outfile << char('h' - destination%8);
+                outfile << char('1' + destination/8);
+                // outfile << " " << values_list[depth-1][i];
+                outfile << "\t\t[";
+                for (int lyr=0; lyr<MAX_DEPTH; lyr++) {
+                    int myorig = layer_best_moves[lyr] >> 6;
+                    int mydest = layer_best_moves[lyr] & 63;
+
+                    outfile << char('h' - myorig%8);
+                    outfile << char('1' + myorig/8);
+                    outfile << char('h' - mydest%8);
+                    outfile << char('1' + mydest/8);
+                    outfile << " ";
+                }
+                outfile << "]" << std::endl;
 
                 // go to next depth
                 board_eval = -minimax(opp(color), depth-1, updated_terminal_depth, -beta, -alpha);
@@ -1332,7 +1347,7 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
         HASH_TABLE[orig_pos_hash][p_best] = best_move;
     }
 
-    layer_best_moves[depth-1] = best_move;
+    layer_best_moves[iteration_depth-depth] = best_move;
     if (depth == iteration_depth) { return best_move; }
     else { return best_eval; }
 }
@@ -1384,8 +1399,9 @@ int depth_search(int color, int depth_cap, bool printout=false) {
                 std::cout << ", ";
             }
             std::cout << "\n\n";
-            iteration_depth++;
         }
+
+        iteration_depth++;
     }
     return move;
 }
