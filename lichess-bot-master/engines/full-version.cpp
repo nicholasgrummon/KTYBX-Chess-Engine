@@ -16,7 +16,7 @@ int called = 0;
 // >>> tune engine here <<<
 /////////////////////////////////////////////////////////////////////////////////////
 // settings
-const int MAX_DEPTH = 4;              // set an evaluation depth
+const int MAX_DEPTH = 5;              // set an evaluation depth
 const int MAX_SEARCH_TIME = 5;         // limit the engine's search time (in seconds)
 const int MAX_TREE_WIDTH = 150;        // provide a max branching factor (must be >= 35)
 const int Q_EXPANSION_FACTOR = 3;      // expand quiescence search up to 3 times deeper
@@ -236,6 +236,35 @@ void read_FEN(std::string fen) {
 /////////////////////////////////////////////////////////////////////////////////////
 // BITBOARD AND MISCELLANEOUS OPERATIONS
 /////////////////////////////////////////////////////////////////////////////////////
+void print_board() {
+    int rank = 8;
+    std::cout << "    KITTY BOX CHESS" << std::endl;
+    std::cout << "   -----------------" << std::endl;
+    for (int i=63; i>=0; i--) {
+        if (i%8 == 7) { std::cout << rank << " | "; rank--; } // print edge
+        if (pos[wP] & (1ULL << i)) { std::cout << "o "; } // print white pieces
+        else if (pos[wN] & (1ULL << i)) { std::cout << "N "; }
+        else if (pos[wB] & (1ULL << i)) { std::cout << "B "; }
+        else if (pos[wR] & (1ULL << i)) { std::cout << "R "; }
+        else if (pos[wQ] & (1ULL << i)) { std::cout << "Q "; }
+        else if (pos[wK] & (1ULL << i)) { std::cout << "K "; }
+
+        else if (pos[bP] & (1ULL << i)) { std::cout << "x "; } // print black pieces
+        else if (pos[bN] & (1ULL << i)) { std::cout << "n "; }
+        else if (pos[bB] & (1ULL << i)) { std::cout << "b "; }
+        else if (pos[bR] & (1ULL << i)) { std::cout << "r "; }
+        else if (pos[bQ] & (1ULL << i)) { std::cout << "q "; }
+        else if (pos[bK] & (1ULL << i)) { std::cout << "k "; }
+
+        else if (pos[empty] & (1ULL << i)) { std::cout << ". "; }
+
+        if (i%8 == 0) { std::cout << "| " << std::endl; }
+
+    }
+    std::cout << "   -----------------" << std::endl;
+    std::cout << "    A B C D E F G H  " << std::endl;
+}
+
 int bit_scan_left(uint64_t bits) {
     // return position of first non-zero bit scanning right to left
     int i = 0;
@@ -765,6 +794,7 @@ void promote(int origination, int destination, int depth) {
         if (pos[i] & (1ULL << destination)) {
             pos[i] ^= (1ULL << destination);
             capture_sequence[depth-1] = (i + promotion_key);
+            break;
         }
     }
 
@@ -781,6 +811,7 @@ void promote(int origination, int destination, int depth) {
 }
 
 void make_move(int origination, int destination, int depth) {
+    // TODO: Error - destination can be en_passant_b/w without being en passant move
     if (en_passant_b & (1ULL << destination)) {
         pos[wP] ^= (1ULL << origination);
         pos[wP] |= (1ULL << destination);
@@ -793,6 +824,7 @@ void make_move(int origination, int destination, int depth) {
         pos[wP] ^= (1ULL << (destination+8));
         capture_sequence[depth-1] = (wP+en_passant_key);
     }
+
     else if (((pos[wK] | pos[bK]) & (1ULL << origination)) && (std::abs(origination - destination) == 2)) {
         castle(origination, destination, depth);
     }
@@ -800,30 +832,33 @@ void make_move(int origination, int destination, int depth) {
     else if (((pos[wP] | pos[bP]) & (1ULL << origination)) && ((RANK_1 | RANK_8) & (1ULL << destination))) {
         promote(origination, destination, depth);
     }
+
     else {
         // remove enemy piece
-        for (int i=0; i<13; i++) {
-            if (pos[i] & (1ULL << destination)) {
-                pos[i] ^= (1ULL << destination);
-                capture_sequence[depth-1] = i;
+        for (int pieceID=0; pieceID<13; pieceID++) {
+            if (pos[pieceID] & (1ULL << destination)) {
+                pos[pieceID] ^= (1ULL << destination);
+                capture_sequence[depth-1] = pieceID;
+                break;
             }
         }
         // move own piece
-        for (int i=0; i<13; i++) {
-            if (pos[i] & (1ULL << origination)) {
-                pos[i] ^= (1ULL << origination);
-                pos[i] |= (1ULL << destination);
+        for (int pieceID=0; pieceID<13; pieceID++) {
+            if (pos[pieceID] & (1ULL << origination)) {
+                pos[pieceID] ^= (1ULL << origination);
+                pos[pieceID] |= (1ULL << destination);
+                break;
             }
         }
     }
 
     en_passant_w = 0; en_passant_b = 0;
-    if ((pos[wP] & (1ULL << origination)) && ((destination-origination) == 16)) {
-        en_passant_w = (1ULL << (origination+8));
-    }
-    else if ((pos[bP] & (1ULL << origination)) && ((origination-destination) == 16)) {
-        en_passant_b = (1ULL << (origination-8));
-    }
+    // if ((pos[wP] & (1ULL << origination)) && ((destination-origination) == 16)) {
+    //     en_passant_w = (1ULL << (origination+8));
+    // }
+    // else if ((pos[bP] & (1ULL << origination)) && ((origination-destination) == 16)) {
+    //     en_passant_b = (1ULL << (origination-8));
+    // }
 
     update_colors();
 }
@@ -946,10 +981,10 @@ int heuristic_eval(int move, int color, int depth) {
     //if ((key == HASH_TABLE[hash][p_key]) && (move == HASH_TABLE[hash][p_best])) { eval += 10000; }
 
     // checks
-    make_move(origination, destination, depth);
+    make_move(origination, destination, 2*MAX_DEPTH+120);
     generate_checks(color);
     if ((pos[wK] | pos[bK]) & ~pos[color] & checks[color-white]) { eval += 500; }    // add incentive for searching checks
-    takeback_move(origination, destination, depth);
+    takeback_move(origination, destination, 2*MAX_DEPTH+120);
     generate_checks(color);
 
     // captures
@@ -1184,36 +1219,40 @@ int quiescence_search(int color, int depth, int alpha, int beta) {
     else if ((pos[wK] == 0) || (pos[bK] == 0)) { return -10000; }
 
     // evade checks only at surface depth
-    else if ((depth == 0) && (pos[wK] & checks[1] || (pos[bK] & checks[0]))) {
-        int num_moves = generate_color_moves_list(color, iteration_depth+depth+1);
-        for (int i=0; i<num_moves; i++) {
-            int origination = (moves_list[iteration_depth+depth][i] >> 6);
-            int destination = (moves_list[iteration_depth+depth][i] & 63);
-            make_move(origination, destination, iteration_depth+depth+1);
-            update_checks();
-            if ((pos[wK] & checks[1]) || (pos[bK] & checks[0])) { 
-                takeback_move(origination, destination, iteration_depth+depth+1);
-            }
-            else {
-                eval = -quiescence_search(opp(color), depth+1, -beta, -alpha);
-                takeback_move(origination, destination, iteration_depth+depth+1);
+    else if (depth == 0) {
+        if (pos[wK] & checks[1] || (pos[bK] & checks[0])) {
+            int num_moves = generate_color_moves_list(color, iteration_depth+depth+1);
+            for (int i=0; i<num_moves; i++) {
+                int origination = (moves_list[iteration_depth+depth][i] >> 6);
+                int destination = (moves_list[iteration_depth+depth][i] & 63);
+                uint64_t savepoint = pos[empty];
+                make_move(origination, destination, iteration_depth+depth+1);
+                update_checks();
+                if ((pos[wK] & checks[1]) || (pos[bK] & checks[0])) { 
+                    takeback_move(origination, destination, iteration_depth+depth+1);
+                }
+                else {
+                    eval = -quiescence_search(opp(color), depth+1, -beta, -alpha);
+                    takeback_move(origination, destination, iteration_depth+depth+1);
 
-                best_eval = std::max(eval, best_eval);
-                alpha = std::max(alpha, best_eval);
-                if (alpha >= beta) { break; }
+                    best_eval = std::max(eval, best_eval);
+                    alpha = std::max(alpha, best_eval);
+                    if (alpha >= beta) { break; }
+                }
             }
         }
     }
+
     else {
         score_captures(num_moves, color, iteration_depth+depth+1);
         for (int i=0; i<num_moves; i++) {
             int move = get_next_best_move(i, num_moves, iteration_depth+depth+1);
             int origination = (move >> 6); int destination = (move & 63);
+            uint64_t savepoint = pos[empty];
             make_move(origination, destination, iteration_depth+depth+1);
             update_checks();
             eval = -quiescence_search(opp(color), depth+1, -beta, -alpha);
             takeback_move(origination, destination, iteration_depth+depth+1);
-
             best_eval = std::max(eval, best_eval);
             alpha = std::max(alpha, best_eval);
             if (alpha >= beta) { break; }
@@ -1297,27 +1336,6 @@ int minimax(int color, int depth, int terminal_depth, int alpha, int beta) {
                 uint64_t move_pos_key = gen_zobrist_key(opp(color)); // the position arising after a move is the other player's turn
                 int move_pos_hash = gen_hash_index(move_pos_key);
 
-                std::ofstream outfile("eval.txt", std::ios_base::app);
-                outfile << iteration_depth << "." << depth << " ";
-                outfile << std::string(iteration_depth-depth, ' ');
-                outfile << char('h' - origination%8);
-                outfile << char('1' + origination/8);
-                outfile << char('h' - destination%8);
-                outfile << char('1' + destination/8);
-                // outfile << " " << values_list[depth-1][i];
-                outfile << "\t\t[";
-                for (int lyr=0; lyr<MAX_DEPTH; lyr++) {
-                    int myorig = layer_best_moves[lyr] >> 6;
-                    int mydest = layer_best_moves[lyr] & 63;
-
-                    outfile << char('h' - myorig%8);
-                    outfile << char('1' + myorig/8);
-                    outfile << char('h' - mydest%8);
-                    outfile << char('1' + mydest/8);
-                    outfile << " ";
-                }
-                outfile << "]" << std::endl;
-
                 // go to next depth
                 board_eval = -minimax(opp(color), depth-1, updated_terminal_depth, -beta, -alpha);
                 takeback_move(origination, destination, depth);
@@ -1358,7 +1376,8 @@ int depth_search(int color, int depth_cap, bool printout=false) {
     iteration_depth = 1;
     int move;
     clock_t start = time(0);
-    while (((time(0) - start) < MAX_SEARCH_TIME) && (iteration_depth <= depth_cap)) {
+    // while (((time(0) - start) < MAX_SEARCH_TIME) && (iteration_depth <= depth_cap)) {
+    while (iteration_depth <= depth_cap) {
         // clear engine statistics from previous iteration
         m_nodes = 0; cut_offs = 0; late_move_reductions = 0; hash_entries = 0;
         q_nodes = 0; max_quiescence_search_depth = 0; called = 0;
@@ -1407,18 +1426,27 @@ int depth_search(int color, int depth_cap, bool printout=false) {
 }
 
 // Main lichess bot
-int main(int argc, char* argv[]) {
+// int main(int argc, char* argv[]) {
+int main() {
     std::ofstream outfile("eval.txt");
     outfile.close();
     fill_RAYS(); update_checks(); seed_tables();
 
-    for (int i=0; i<argc; i++) {
-        if (std::string(argv[i]) == "-i") {
-            read_FEN(argv[++i]);
-        }
-    }
+    // for (int i=0; i<argc; i++) {
+    //     if (std::string(argv[i]) == "-i") {
+    //         read_FEN(argv[++i]);
+    //     }
+    // }
+    
+    // make_move(12,28,1);
+    // make_move(52,36,2);
+    // for (int lyr=0; lyr<MAX_DEPTH; lyr++) {
+    //     std::cout << capture_sequence[lyr] << std::endl;
+    // }
+    read_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     
     int move = depth_search(computer, MAX_DEPTH, true);
     print_coords(move);
+
     return 0;
 }
